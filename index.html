@@ -276,6 +276,37 @@ function appendMessage(role, text) {
 }
 
 async function sendMessage() {
+    let apiKey = localStorage.getItem('arduino_bot_key') || '';
+let conversationHistory = [];
+let isWaiting = false;
+
+// Masquer la zone de saisie si la clé est déjà en mémoire
+if(apiKey) document.getElementById('keySetup').style.display = 'none';
+
+const SYSTEM_PROMPT = `Tu es ArduinoBot, un assistant pédagogique pour collégiens. 
+Tu aides sur Arduino Uno et Codecraft. 
+Règles : Langage simple, emojis, guide l'élève sans donner la solution directe. 
+Réponds toujours en Français.`;
+
+function saveKey() {
+  const input = document.getElementById('apiKeyInput');
+  const key = input.value.trim();
+  if (!key.startsWith('AIza')) {
+    alert('Clé invalide. Une clé Google Gemini commence par "AIza"');
+    return;
+  }
+  apiKey = key;
+  localStorage.setItem('arduino_bot_key', key);
+  document.getElementById('keySetup').style.display = 'none';
+  document.getElementById('sendBtn').disabled = false;
+  addWelcomeMessage();
+}
+
+function addWelcomeMessage() {
+  appendMessage('bot', "👋 **Bonjour ! Je suis ArduinoBot.** Pose-moi une question sur tes montages !");
+}
+
+async function sendMessage() {
     if (!apiKey || isWaiting) return;
     const input = document.getElementById('userInput');
     const text = input.value.trim();
@@ -285,17 +316,23 @@ async function sendMessage() {
     isWaiting = true;
     appendMessage('user', text);
     
-    // Format pour Gemini
+    // Format spécifique pour Gemini
     conversationHistory.push({ role: "user", parts: [{ text: text }] });
     
-    // Affichage chargement
-    const typing = document.createElement('div');
-    typing.id = 'loader';
-    typing.innerHTML = '<div class="typing"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';
-    document.getElementById('chat').appendChild(typing);
+    const chat = document.getElementById('chat');
+    const loaderId = "loader-" + Date.now();
+    const loaderDiv = document.createElement('div');
+    loaderDiv.id = loaderId;
+    loaderDiv.className = 'msg bot';
+    loaderDiv.innerHTML = `<div class="avatar bot">ARD</div><div class="bubble"><div class="typing"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div></div>`;
+    chat.appendChild(loaderDiv);
+    chat.scrollTop = chat.scrollHeight;
 
     try {
-        const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${apiKey}`, {
+        // Utilisation du modèle 1.5-flash (le plus stable en gratuit)
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+
+        const resp = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -305,32 +342,39 @@ async function sendMessage() {
         });
 
         const data = await resp.json();
-        document.getElementById('loader').remove();
+        if (document.getElementById(loaderId)) document.getElementById(loaderId).remove();
 
-        if (data.candidates && data.candidates[0].content) {
+        if (data.error) {
+            let errorMsg = data.error.message;
+            if (data.error.code === 429) errorMsg = "Quota dépassé ou clé trop récente. Réessaie dans 1 minute.";
+            appendMessage('bot', `⚠️ **Erreur :** ${errorMsg}`);
+        } else if (data.candidates && data.candidates[0].content) {
             const reply = data.candidates[0].content.parts[0].text;
-            appendMessage('bot', reply);
+            appendMessage('bot', formatReply(reply));
             conversationHistory.push({ role: "model", parts: [{ text: reply }] });
-        } else {
-            throw new Error("Erreur de réponse API");
         }
     } catch (e) {
-        document.getElementById('loader').remove();
-        appendMessage('bot', "❌ Désolé, j'ai un problème de connexion. Vérifie ta clé API.");
-        console.error(e);
+        if (document.getElementById(loaderId)) document.getElementById(loaderId).remove();
+        appendMessage('bot', "❌ **Erreur réseau.** Vérifie ta connexion ou publie ton fichier sur GitHub pour éviter le blocage 'CORS'.");
     } finally {
         isWaiting = false;
     }
 }
 
-function handleKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }
-function quickTopic(t) { 
-    const q = { capteurs: "C'est quoi un capteur ?", arduino: "Explique moi la carte Arduino Uno", codecraft: "Comment faire clignoter une LED ?", actionneurs: "C'est quoi un servomoteur ?" };
-    document.getElementById('userInput').value = q[t];
-    sendMessage();
+// Fonctions utilitaires
+function appendMessage(role, html) {
+  const chat = document.getElementById('chat');
+  const msgDiv = document.createElement('div');
+  msgDiv.className = `msg ${role}`;
+  msgDiv.innerHTML = `<div class="avatar ${role}">${role==='bot'?'ARD':'👤'}</div><div class="bubble">${html}</div>`;
+  chat.appendChild(msgDiv);
+  chat.scrollTop = chat.scrollHeight;
 }
 
+function formatReply(text) {
+  return text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
+}
+
+function handleKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }
+function quickTopic(t) { document.getElementById('userInput').value = t; sendMessage(); }
 if(apiKey) addWelcomeMessage();
-</script>
-</body>
-</html>
